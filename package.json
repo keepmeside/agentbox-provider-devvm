@@ -1,0 +1,45 @@
+{
+  "name": "agentbox-provider-devvm",
+  "version": "0.1.0",
+  "description": "AgentBox provider plugin that runs each box as a devvm virtual machine on this computer (requires Stella's devvm fork)",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    }
+  },
+  "agentbox": {
+    "providerApiVersion": 4
+  },
+  "engines": {
+    "node": ">=20.10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/keepmeside/agentbox-provider-devvm.git"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "clean": "rm -rf dist",
+    "prepack": "npm run build"
+  },
+  "files": [
+    "dist",
+    "scripts",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@madarco/agentbox-provider-sdk": "^4.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.4"
+  }
+}
