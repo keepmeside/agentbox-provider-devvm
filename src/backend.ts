@@ -48,8 +48,13 @@ import {
 
 export const BACKEND_NAME = 'devvm';
 
-/** devvm's measured times: create from a snapshot ~20 s, start ~8 s, stop ~2 s. */
+/**
+ * devvm's measured times: create from a snapshot ~20 s, start ~8 s, stop ~2 s. A create with no
+ * snapshot (the `prepare` builder) may first download Ubuntu's image and build devvm's own, which
+ * devvm bounds itself; it gets the installer's ceiling.
+ */
 const CREATE_TIMEOUT_MS = 600_000;
+const FIRST_CREATE_TIMEOUT_MS = 40 * 60_000;
 const START_TIMEOUT_MS = 180_000;
 const QUICK_TIMEOUT_MS = 60_000;
 const EXEC_TIMEOUT_MS = 30 * 60_000;
@@ -90,19 +95,40 @@ export async function makeVm(
   folder: string,
   opts: { snapshot?: string; cpu?: number; memory?: number; onLog?: (line: string) => void },
 ): Promise<string> {
+  // devvm's `create` starts a folder's VM when it already has one: a box always starts fresh.
+  const stale = (await listVms()).find((vm) => vm.folder === folder);
+  if (stale) {
+    throw new Error(
+      `A devvm VM (${stale.name}) is left over in ${folder}. Remove it with \`devvm rm --vm ${stale.name} --force\`, then try again.`,
+    );
+  }
   await mkdir(folder, { recursive: true });
-  const out = await devvm(createArgs(opts), {
-    cwd: folder,
-    timeoutMs: CREATE_TIMEOUT_MS,
-  });
-  const vm = parseCreate(out);
-  await writeSsh(vm.name, vm.ssh);
-  return vm.name;
+  try {
+    const out = await devvm(createArgs(opts), {
+      cwd: folder,
+      timeoutMs: opts.snapshot ? CREATE_TIMEOUT_MS : FIRST_CREATE_TIMEOUT_MS,
+      onLine: opts.onLog,
+    });
+    const vm = parseCreate(out);
+    await writeSsh(vm.name, vm.ssh);
+    return vm.name;
+  } catch (err) {
+    // A half-made VM and its folder never outlive a failed create.
+    const made = await listVms().catch(() => []);
+    for (const vm of made.filter((entry) => entry.folder === folder)) {
+      await devvm(rmArgs(vm.name), { timeoutMs: QUICK_TIMEOUT_MS }).catch(() => undefined);
+    }
+    await rm(folder, { recursive: true, force: true });
+    throw err;
+  }
 }
 
-/** Deletes the VM (missing is fine), its folder and its record. */
+/**
+ * Deletes the VM, its folder and its record. A VM devvm no longer lists is already gone; a listing
+ * that fails is an error, so a box is never forgotten while its VM still runs.
+ */
 export async function removeVm(vm: string, folder?: string): Promise<void> {
-  const known = await findVm(vm).catch(() => undefined);
+  const known = await findVm(vm);
   if (known) await devvm(rmArgs(vm), { timeoutMs: QUICK_TIMEOUT_MS });
   const dir = folder ?? known?.folder;
   if (dir && dir.startsWith(`${boxesRoot()}/`)) await rm(dir, { recursive: true, force: true });
@@ -205,15 +231,15 @@ export const devvmBackend: CloudBackend = {
   },
 
   async downloadFile(h, remotePath: string, localPath: string) {
+    await mkdir(dirname(localPath), { recursive: true });
     const result = await runDevvm(execArgs(h.sandboxId, ['cat', remotePath]), {
-      binary: true,
+      toFile: localPath,
       timeoutMs: EXEC_TIMEOUT_MS,
     });
     if (result.exitCode !== 0) {
+      await rm(localPath, { force: true });
       throw new Error(`Could not copy ${remotePath} out of the box: ${result.stderr.trim()}`);
     }
-    await mkdir(dirname(localPath), { recursive: true });
-    await writeFile(localPath, result.raw);
   },
 
   async listFiles(h, remoteDir: string): Promise<CloudFileEntry[]> {

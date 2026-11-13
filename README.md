@@ -27,7 +27,7 @@ Stella installs it for you from this repository's release tarball and sets
   deletes the VM and the folder.
 - `prepare` makes a builder VM, runs `scripts/install-box.sh` as root with
   AgentBox's box runtime, and saves it as the devvm snapshot
-  `agentbox-base-<12 hex>`; every box starts from it.
+  `ab-<10 hex>`; every box starts from it.
 - Preview URLs are `devvm forward` loopback ports (one per box and port).
 - Checkpoints are devvm snapshots. Saving one stops and starts the box.
 - No Docker-in-Docker and no VNC in a box.

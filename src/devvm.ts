@@ -6,6 +6,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { createWriteStream } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -223,18 +224,19 @@ export interface RunOptions {
   cwd?: string;
   input?: Buffer | string;
   timeoutMs?: number;
-  /** Raw stdout bytes instead of text (downloads). */
-  binary?: boolean;
+  /** Stream stdout into this file instead of keeping it (downloads: any size, no buffer). */
+  toFile?: string;
   onLine?: (line: string) => void;
 }
 
+/**
+ * Text output kept per command. Past it the run fails (never a silently shortened answer);
+ * anything large goes to a file with `toFile`.
+ */
 const OUTPUT_LIMIT = 64 * 1024 * 1024;
 
 /** Runs devvm and waits at most `timeoutMs` (default 120 s). Never throws for a non-zero exit. */
-export function runDevvm(
-  args: string[],
-  opts: RunOptions = {},
-): Promise<RunResult & { raw: Buffer }> {
+export function runDevvm(args: string[], opts: RunOptions = {}): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(devvmBin(), args, {
       cwd: opts.cwd,
@@ -243,12 +245,28 @@ export function runDevvm(
     });
     const out: Buffer[] = [];
     let outLen = 0;
+    let truncated = false;
     let err = '';
     let partial = '';
+    const file = opts.toFile ? createWriteStream(opts.toFile) : undefined;
+    let fileError: Error | undefined;
+    const fileClosed = file
+      ? new Promise<void>((done) => {
+          file.on('close', () => done());
+          file.on('error', (e) => {
+            fileError = e;
+            done();
+          });
+        })
+      : Promise.resolve();
+    if (file && child.stdout) child.stdout.pipe(file);
     child.stdout?.on('data', (chunk: Buffer) => {
-      if (outLen < OUTPUT_LIMIT) {
+      if (file) return;
+      if (outLen + chunk.length <= OUTPUT_LIMIT) {
         out.push(chunk);
         outLen += chunk.length;
+      } else {
+        truncated = true;
       }
       if (opts.onLine) {
         partial += chunk.toString('utf8');
@@ -264,10 +282,11 @@ export function runDevvm(
       if (opts.onLine) for (const line of chunk.toString('utf8').split('\n')) if (line) opts.onLine(line);
     });
     const timeoutMs = opts.timeoutMs ?? 120_000;
+    let timedOut = false;
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGTERM');
       setTimeout(() => child.kill('SIGKILL'), 2000).unref();
-      err += `\ndevvm ${args[0] ?? ''} took longer than ${Math.round(timeoutMs / 1000)} seconds.`;
     }, timeoutMs);
     child.on('error', (e) => {
       clearTimeout(timer);
@@ -279,13 +298,22 @@ export function runDevvm(
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      if (opts.onLine && partial) opts.onLine(partial);
-      const raw = Buffer.concat(out);
-      resolve({
-        exitCode: code ?? 1,
-        stdout: opts.binary ? '' : raw.toString('utf8'),
-        stderr: err,
-        raw,
+      void fileClosed.then(() => {
+        if (opts.onLine && partial) opts.onLine(partial);
+        let exitCode = code ?? 1;
+        if (timedOut) {
+          exitCode = exitCode === 0 ? 1 : exitCode;
+          err += `\ndevvm ${args[0] ?? ''} took longer than ${Math.round(timeoutMs / 1000)} seconds.`;
+        }
+        if (truncated) {
+          exitCode = exitCode === 0 ? 1 : exitCode;
+          err += `\ndevvm ${args[0] ?? ''} printed more than ${OUTPUT_LIMIT / 1024 / 1024} MiB; the answer was not used.`;
+        }
+        if (fileError) {
+          exitCode = exitCode === 0 ? 1 : exitCode;
+          err += `\nCould not write ${opts.toFile}: ${fileError.message}`;
+        }
+        resolve({ exitCode, stdout: Buffer.concat(out).toString('utf8'), stderr: err });
       });
     });
     if (opts.input !== undefined && child.stdin) {
