@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { devvmBackend, makeVm } from '../src/backend.js';
 import { runDevvm } from '../src/devvm.js';
+import { prepareDevvm, RUNTIME_ASSETS } from '../src/prepare.js';
 
 const MIB = 1024 * 1024;
 let dir: string;
@@ -82,5 +83,33 @@ describe('create', () => {
     );
     await expect(makeVm(folder, {})).rejects.toThrow(/left over/);
     expect(existsSync(join(dir, 'home', 'create-called'))).toBe(false);
+  });
+});
+
+describe('prepare', () => {
+  it('throws away a builder VM an interrupted bake left, then bakes', async () => {
+    const runtime = join(dir, 'runtime');
+    mkdirSync(join(runtime, '_shared'), { recursive: true });
+    for (const asset of RUNTIME_ASSETS) {
+      if ('shared' in asset.source) writeFileSync(join(runtime, '_shared', asset.source.shared), 'x');
+    }
+    const savedRuntime = process.env['AGENTBOX_CLI_RUNTIME_DIR'];
+    process.env['AGENTBOX_CLI_RUNTIME_DIR'] = runtime;
+    const builder = join(dir, 'home', '.agentbox', 'devvm', 'ab-prepare');
+    fake(
+      `  snapshot) printf '{"version":1,"snapshots":[]}'; exit 0 ;;\n` +
+        `  ls) if [ -f "$HOME/rm-called" ]; then printf '{"version":1,"vms":[]}'; else printf '{"version":1,"vms":[{"name":"devvm-ab-prepare-0123456789abcd","status":"Running","folder":"%s"}]}' "${builder}"; fi; exit 0 ;;\n` +
+        `  rm) touch "$HOME/rm-called"; exit 0 ;;\n` +
+        `  create) touch "$HOME/create-called"; echo "stop here" >&2; exit 1 ;;`,
+    );
+    try {
+      await expect(prepareDevvm({ onLog: () => {} })).rejects.toThrow(/stop here/);
+    } finally {
+      if (savedRuntime === undefined) delete process.env['AGENTBOX_CLI_RUNTIME_DIR'];
+      else process.env['AGENTBOX_CLI_RUNTIME_DIR'] = savedRuntime;
+    }
+    expect(existsSync(join(dir, 'home', 'rm-called'))).toBe(true);
+    // The builder's create ran (it was not refused as a leftover).
+    expect(existsSync(join(dir, 'home', 'create-called'))).toBe(true);
   });
 });

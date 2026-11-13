@@ -82,7 +82,7 @@ export async function readSsh(vm: string): Promise<BoxSsh | null> {
   }
 }
 
-async function listVms(): Promise<DevvmVm[]> {
+export async function listVms(): Promise<DevvmVm[]> {
   return parseLs(await devvm(lsArgs(), { timeoutMs: QUICK_TIMEOUT_MS }), boxesRoot());
 }
 
@@ -99,7 +99,7 @@ export async function makeVm(
   const stale = (await listVms()).find((vm) => vm.folder === folder);
   if (stale) {
     throw new Error(
-      `A devvm VM (${stale.name}) is left over in ${folder}. Remove it with \`devvm rm --vm ${stale.name} --force\`, then try again.`,
+      `A devvm VM (${stale.name}) is left over in ${folder}. Remove it with \`agentbox prune --provider devvm\` (or \`devvm rm --vm ${stale.name} --force\`), then try again.`,
     );
   }
   await mkdir(folder, { recursive: true });

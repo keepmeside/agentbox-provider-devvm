@@ -22,7 +22,7 @@ import {
   preparedStatePathFor,
   type Provider,
 } from '@madarco/agentbox-provider-sdk';
-import { BACKEND_NAME, makeVm, removeVm, rootExec } from './backend.js';
+import { BACKEND_NAME, listVms, makeVm, removeVm, rootExec } from './backend.js';
 import { builderFolder, devvm, parseSnapshots, shq, snapshotListArgs, snapshotRmArgs, snapshotSaveArgs } from './devvm.js';
 
 const SELF = dirname(fileURLToPath(import.meta.url));
@@ -128,6 +128,11 @@ export const prepareDevvm: NonNullable<Provider['prepare']> = async (req) => {
   }
 
   const folder = builderFolder();
+  // A builder an interrupted bake left behind is ours to throw away.
+  for (const left of (await listVms()).filter((vm) => vm.folder === folder)) {
+    progress(`removing the builder VM ${left.name} an earlier bake left`);
+    await removeVm(left.name, folder);
+  }
   progress('making the builder VM (the first one also builds devvm\'s image)');
   const vm = await makeVm(folder, { cpu: 4, memory: 4 });
   try {
